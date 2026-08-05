@@ -1,8 +1,8 @@
 """
-train_dense_ddp.py — Qwen3.5-27B Dense LoRA Fine-Tune  (Unsloth + TRL, DDP)
-=============================================================================
+Qwen3.5-27B Dense LoRA Fine-Tune  (Unsloth + TRL, DDP)
+========================================================
 Hardware  : 8 × A100-SXM4-80GB
-Run with  : UNSLOTH_COMPILE_TRANSFORMERS=0 torchrun --nproc_per_node 8 train_dense_ddp.py
+Run with  : UNSLOTH_COMPILE_TRANSFORMERS=0 torchrun --nproc_per_node 8 dense_27b_unsloth.py
 
 Key design decisions:
 - FastLanguageModel (text-only, not vision) for maximum throughput on dense models
@@ -29,8 +29,9 @@ os.environ["TRITON_CACHE_DIR"]             = f"/tmp/triton_cache_{local_rank}"  
 os.environ["UNSLOTH_COMPILE_TRANSFORMERS"] = "0"
 
 # ── config ─────────────────────────────────────────────────────────────────────
-MODEL_NAME       = "unsloth/Qwen3.5-27B"    # Unsloth mirror is faster to download
-DATASET_NAME     = "<YOUR_DATASET>"          # HuggingFace dataset id, e.g. "username/dataset"
+# Override with environment variables, or edit the defaults.
+MODEL_NAME       = os.environ.get("MODEL_NAME", "unsloth/Qwen3.5-27B")  # Unsloth mirror downloads faster
+DATASET_NAME     = os.environ.get("DATASET_NAME", "")   # required -- HF dataset id
 DATASET_SPLIT    = "train"
 MAX_SEQ_LENGTH   = 2048
 LORA_RANK        = 16
@@ -48,8 +49,11 @@ DATASET_NUM_PROC = 4     # CPU workers for dataset preprocessing
 
 OUTPUT_DIR  = "outputs_qwen35_27b"
 MERGED_DIR  = "qwen35_27b_merged"
-HF_REPO     = "<YOUR_HF_REPO>"    # e.g. "username/model-name"
-HF_TOKEN    = os.environ.get("HF_TOKEN", "")
+HF_REPO     = os.environ.get("HF_REPO", "")     # optional -- push skipped if empty
+HF_TOKEN    = os.environ.get("HF_TOKEN", "")    # never hardcode a token here
+
+if not DATASET_NAME:
+    raise SystemExit("Set DATASET_NAME (env var or edit the config block above).")
 
 # ── clear stale compiled cache (rank-0 only, before dist init) ────────────────
 # Stale Unsloth compiled cache can cause dtype mismatch errors on restart
@@ -205,7 +209,7 @@ if local_rank == 0:
     model.save_pretrained_merged(MERGED_DIR, tokenizer, save_method="merged_16bit")
     print(f"Saved merged model to: {MERGED_DIR}")
 
-    if HF_TOKEN:
+    if HF_TOKEN and HF_REPO:
         from huggingface_hub import HfApi
         api = HfApi(token=HF_TOKEN)
         api.create_repo(repo_id=HF_REPO, exist_ok=True, private=False)
@@ -217,4 +221,4 @@ if local_rank == 0:
         )
         print("Upload complete!")
     else:
-        print("HF_TOKEN not set — skipping upload.")
+        print("HF_TOKEN or HF_REPO not set -- skipping upload.")

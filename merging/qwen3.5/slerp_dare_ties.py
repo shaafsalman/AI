@@ -1,34 +1,59 @@
 #!/usr/bin/env python3
 """
-Custom SLERP + DARE-TIES merge for Qwen3.5-9B hybrid architecture.
-Uses huggingface_hub snapshot_download to handle all model formats.
+Weight-space merge of a base and a fine-tuned Qwen3.5 checkpoint
+=================================================================
+Produces two merged models in one pass, so you can evaluate both and keep
+whichever scores better:
+
+  1. SLERP      -- spherical interpolation between base and fine-tuned weights.
+                   Preserves weight norm better than a plain linear blend.
+  2. DARE       -- randomly drops a fraction of the delta (ft - base), rescales
+                   the survivors by 1/density, then adds FT_RATIO x delta back
+                   onto the base.
+
+Runs entirely on CPU and streams shard by shard, so it needs RAM (roughly 2x
+the model size for a 9B in BF16) but no GPU.
+
+Naming note: the output directory is called `merged-dare-ties` for backwards
+compatibility, but this implements DARE only. There is no TIES sign-election
+step -- that would require resolving sign conflicts across three or more task
+vectors, and this script merges exactly two checkpoints.
+
+Tensors present only in the fine-tuned model are copied through unchanged, as
+are tensors whose shapes disagree between the two checkpoints.
 """
 
-import torch
+import glob
 import json
 import os
 import shutil
-import glob
 from pathlib import Path
+
+import torch
 from huggingface_hub import snapshot_download
 from safetensors.torch import load_file, save_file
 from tqdm import tqdm
 
-BASE_MODEL       = "Qwen/Qwen3.5-9B"
-FINETUNED_MODEL  = ""
+# ── config ────────────────────────────────────────────────────────────────────
+# Override with environment variables, or edit the defaults.
+BASE_MODEL      = os.environ.get("BASE_MODEL", "Qwen/Qwen3.5-9B")
+FINETUNED_MODEL = os.environ.get("FINETUNED_MODEL", "")   # required -- HF repo id or local path
+
 BASE_CACHE       = "./cache_base"
 FT_CACHE         = "./cache_ft"
 OUTPUT_SLERP     = "./merged-slerp"
 OUTPUT_DARE_TIES = "./merged-dare-ties"
 DEVICE           = "cpu"
 
-# ── Merge ratio ───────────────────────────────────────────────────────────────
-# FT_RATIO = how much of the finetuned model to blend in (0.0 = pure base, 1.0 = pure ft)
-# 0.30 → 70% base / 30% finetuned
-FT_RATIO         = 0.30
-# DARE-TIES: fraction of delta weights kept before scaling
-DARE_DENSITY     = 0.70
-# ─────────────────────────────────────────────────────────────────────────────
+# How much of the fine-tuned model to blend in.
+# 0.0 = pure base, 1.0 = pure fine-tuned; 0.30 -> 70% base / 30% fine-tuned.
+FT_RATIO = 0.30
+
+# DARE: fraction of delta weights kept before rescaling.
+DARE_DENSITY = 0.70
+
+if not FINETUNED_MODEL:
+    raise SystemExit("Set FINETUNED_MODEL (env var or edit the config block above).")
 
 
 def download_model(repo_id: str, cache_dir: str) -> str:
@@ -85,7 +110,7 @@ def slerp(t: float, v0: torch.Tensor, v1: torch.Tensor, eps: float = 1e-8) -> to
     return (s0 * v0_flat + s1 * v1_flat).to(v0.dtype).reshape(orig_shape)
 
 
-def dare_ties_merge(
+def dare_merge(
     base: torch.Tensor,
     ft: torch.Tensor,
     density: float = DARE_DENSITY,
@@ -162,19 +187,19 @@ def merge_tensors_slerp(base: dict, ft: dict) -> dict:
     return result
 
 
-def merge_tensors_dare_ties(base: dict, ft: dict) -> dict:
+def merge_tensors_dare(base: dict, ft: dict) -> dict:
     common  = set(base.keys()) & set(ft.keys())
     only_ft = set(ft.keys()) - set(base.keys())
     result  = {}
 
-    for key in tqdm(common, desc="  DARE-TIES"):
+    for key in tqdm(common, desc="  DARE"):
         b, f = base[key], ft[key]
         if b.shape != f.shape:
             result[key] = f
         elif b.dim() == 0 or b.numel() == 1:
             result[key] = f
         else:
-            result[key] = dare_ties_merge(b, f)
+            result[key] = dare_merge(b, f)
 
     for key in only_ft:
         result[key] = ft[key]
@@ -183,7 +208,7 @@ def merge_tensors_dare_ties(base: dict, ft: dict) -> dict:
 
 def main():
     print("=" * 60)
-    print("  Qwen3.5-9B Custom Model Merger")
+    print("  Qwen3.5 Weight-Space Model Merger")
     print(f"  Base:      {BASE_MODEL}")
     print(f"  Finetuned: {FINETUNED_MODEL}")
     print(f"  Ratio:     {int((1 - FT_RATIO) * 100)}% base / {int(FT_RATIO * 100)}% ft")
@@ -219,19 +244,19 @@ def main():
     slerp_result = merge_tensors_slerp(base_tensors, ft_tensors)
     copy_config_files(FT_CACHE, OUTPUT_SLERP)
     save_sharded(slerp_result, OUTPUT_SLERP)
-    print(f"   SLERP → {OUTPUT_SLERP}")
+    print(f"   SLERP     -> {OUTPUT_SLERP}")
     del slerp_result
 
-    print(f"\n[6/6] DARE-TIES merge  (weight={FT_RATIO}, density={DARE_DENSITY})...")
-    dare_result = merge_tensors_dare_ties(base_tensors, ft_tensors)
+    print(f"\n[6/6] DARE merge  (weight={FT_RATIO}, density={DARE_DENSITY})...")
+    dare_result = merge_tensors_dare(base_tensors, ft_tensors)
     copy_config_files(FT_CACHE, OUTPUT_DARE_TIES)
     save_sharded(dare_result, OUTPUT_DARE_TIES)
-    print(f"   DARE-TIES → {OUTPUT_DARE_TIES}")
+    print(f"   DARE      -> {OUTPUT_DARE_TIES}")
 
     print("\n" + "=" * 60)
     print("  ALL DONE")
-    print(f"  SLERP:     {OUTPUT_SLERP}")
-    print(f"  DARE-TIES: {OUTPUT_DARE_TIES}")
+    print(f"  SLERP: {OUTPUT_SLERP}")
+    print(f"  DARE : {OUTPUT_DARE_TIES}")
     print("=" * 60)
 
 

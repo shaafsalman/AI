@@ -2,7 +2,7 @@
 Qwen3.5-4B LoRA Fine-Tune  (Unsloth + TRL, multi-GPU)
 ======================================================
 Hardware  : 8 × A100 80GB
-Run with  : torchrun --nproc_per_node=8 Qwen3.5-4B.py
+Run with  : torchrun --nproc_per_node=8 dense_4b_unsloth.py
 
 Notes:
 - Uses Unsloth FastLanguageModel for optimised BF16 LoRA
@@ -18,16 +18,20 @@ Notes:
 import unsloth  # MUST be imported first so Unsloth patches are applied early
 
 import os
+import shutil
+
 import torch
+from accelerate import PartialState
 from datasets import load_dataset
+from huggingface_hub import HfApi, snapshot_download
 from trl import SFTTrainer, SFTConfig
 from unsloth import FastLanguageModel
-from accelerate import PartialState
 
 # ── config ─────────────────────────────────────────────────────────────────────
-MODEL_NAME     = ""    # e.g. "unsloth/Qwen3.5-4B" or "Qwen/Qwen3.5-4B"
-DATASET_NAME   = ""    # HuggingFace dataset id, e.g. "username/dataset"
-HF_PUSH_REPO   = ""    # destination repo, e.g. "username/model-name"
+# Override with environment variables, or edit the defaults.
+MODEL_NAME   = os.environ.get("MODEL_NAME", "unsloth/Qwen3.5-4B")
+DATASET_NAME = os.environ.get("DATASET_NAME", "")   # required -- HF dataset id
+HF_REPO      = os.environ.get("HF_REPO", "")        # optional -- push skipped if empty
 
 # Sequence settings
 MAX_SEQ_LENGTH = 4096
@@ -52,6 +56,9 @@ SEED             = 3407
 
 OUTPUT_DIR  = "./outputs/qwen35-4b"
 MERGED_DIR  = "./outputs/qwen35-4b-merged"
+
+if not DATASET_NAME:
+    raise SystemExit("Set DATASET_NAME (env var or edit the config block above).")
 
 # ── 1. load model + tokenizer ──────────────────────────────────────────────────
 print("Loading model …")
@@ -155,41 +162,40 @@ trainer_stats = trainer.train()
 print(f"Training complete. Steps: {trainer_stats.global_step}")
 print(f"Peak VRAM per GPU: {torch.cuda.max_memory_reserved() / 1e9:.2f} GB")
 
+# Everything below writes to disk or to the Hub, so only rank 0 runs it.
+IS_MAIN = int(os.environ.get("LOCAL_RANK", 0)) == 0
+
 # ── 6. save LoRA adapter ───────────────────────────────────────────────────────
-if int(os.environ.get("LOCAL_RANK", 0)) == 0:
+if IS_MAIN:
     adapter_dir = os.path.join(OUTPUT_DIR, "final-adapter")
     model.save_pretrained(adapter_dir)
     tokenizer.save_pretrained(adapter_dir)
-    print(f"LoRA adapter saved → {adapter_dir}")
+    print(f"LoRA adapter saved -> {adapter_dir}")
 
 # ── 7. merge LoRA into base model for vLLM serving ────────────────────────────
-if int(os.environ.get("LOCAL_RANK", 0)) == 0:
-    print("Merging LoRA into base model for vLLM …")
+if IS_MAIN:
+    print("Merging LoRA into base model for vLLM ...")
     model.save_pretrained_merged(
         MERGED_DIR,
         tokenizer,
         save_method = "merged_16bit",
     )
-    print(f"Merged model saved → {MERGED_DIR}")
+    print(f"Merged model saved -> {MERGED_DIR}")
 
 # ── 8. push to HuggingFace Hub ─────────────────────────────────────────────────
-if int(os.environ.get("LOCAL_RANK", 0)) == 0:
-    print(f"Pushing to HF Hub: {HF_PUSH_REPO} …")
+if IS_MAIN and HF_REPO:
+    print(f"Pushing to HF Hub: {HF_REPO} ...")
     model.push_to_hub_merged(
-        HF_PUSH_REPO,
+        HF_REPO,
         tokenizer,
         save_method = "merged_16bit",
     )
-    print(f"Done → https://huggingface.co/{HF_PUSH_REPO}")
+    print(f"Done -> https://huggingface.co/{HF_REPO}")
 
-# ── 9. fix tokenizer: replace with base model tokenizer files ─────────────────
-# Unsloth writes a custom TokenizersBackend tokenizer that vLLM can't load.
-# Fix: overwrite with the base model's standard tokenizer files.
-if int(os.environ.get("LOCAL_RANK", 0)) == 0:
-    print("Fixing tokenizer: replacing with base model tokenizer files …")
-    from huggingface_hub import snapshot_download, HfApi
-    import shutil
-
+    # ── 9. fix tokenizer: replace with base model tokenizer files ─────────────
+    # Unsloth writes a custom TokenizersBackend tokenizer that vLLM can't load.
+    # Fix: overwrite with the base model's standard tokenizer files.
+    print("Fixing tokenizer: replacing with base model tokenizer files ...")
     base_tokenizer_dir = os.path.join(OUTPUT_DIR, "base_tokenizer_tmp")
     snapshot_download(
         MODEL_NAME,
@@ -200,19 +206,22 @@ if int(os.environ.get("LOCAL_RANK", 0)) == 0:
     api = HfApi()
     api.upload_folder(
         folder_path    = base_tokenizer_dir,
-        repo_id        = HF_PUSH_REPO,
+        repo_id        = HF_REPO,
         repo_type      = "model",
         commit_message = "Fix tokenizer: replace with base model tokenizer files",
     )
 
     shutil.rmtree(base_tokenizer_dir)
-    print(f"Tokenizer fixed → https://huggingface.co/{HF_PUSH_REPO}")
+    print(f"Tokenizer fixed -> https://huggingface.co/{HF_REPO}")
+
+elif IS_MAIN:
+    print("HF_REPO not set -- skipping push.")
 
 # ── 10. vLLM serve command ─────────────────────────────────────────────────────
-if int(os.environ.get("LOCAL_RANK", 0)) == 0:
+if IS_MAIN:
     print(f"""
 To serve with vLLM:
-  vllm serve {HF_PUSH_REPO} \\
+  vllm serve {HF_REPO or MERGED_DIR} \\
       --tensor-parallel-size 8 \\
       --max-model-len 32768 \\
       --reasoning-parser qwen3 \\

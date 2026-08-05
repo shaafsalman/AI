@@ -1,0 +1,11 @@
+# Weight-space merging — for slerp_dare_ties.py
+#
+#   pip install -r requirements.txt
+#
+# CPU-only: no CUDA, no transformers, no training stack. Safe to install
+# alongside anything else.
+
+torch>=2.4
+safetensors>=0.4
+huggingface_hub>=0.26
+tqdm>=4.66

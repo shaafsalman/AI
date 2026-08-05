@@ -1,36 +1,51 @@
 """
-AWQ W8A16 Quantization for Qwen3.5-9B (VL Architecture)
+AWQ W8A16 Quantization for Qwen3.5-9B (VL architecture)
+========================================================
+Method : Activation-aware Weight Quantization (AWQ), calibration-based
+Output : ~13 GB  (vs ~19 GB BF16 original)
+Time   : ~35-45 minutes on an A100 40GB
 
-Method: Activation-aware Weight Quantization (AWQ) with calibration data
-Output: ~13 GB  (vs ~19 GB BF16 original)
-Time  : ~35-45 minutes on A100 40GB
+Use this when you can spare the time and have in-domain calibration data --
+AWQ picks per-channel scales from real activations, so it holds accuracy
+better than the data-free RTN pass in rtn_w8a16.py.
 
 Architecture notes (Qwen3.5-9B):
-  - Unified VLM: vision encoder is fused, not a separate tower
+  - Unified VLM: the vision encoder is fused, not a separate tower
   - Hybrid layers: 8x full-attention + 24x GDN (linear_attn) blocks
-  - GDN layers ignored — same as Qwen's official FP8/GPTQ models
-  - offload_device=cpu required to prevent OOM during AWQ scale search
+  - GDN layers are left in BF16, matching Qwen's own FP8/GPTQ releases
+  - offload_device=cpu is required to avoid OOM during the AWQ scale search
+
+Example:
+    python awq_w8a16.py \\
+        --model_id  username/my-finetuned-qwen35-9b \\
+        --dataset_id username/my-calibration-set \\
+        --hf_repo   username/my-qwen35-9b-awq-w8a16
 """
 
+import argparse
 import os
+
 import torch
 from datasets import load_dataset, Dataset
-from transformers import AutoProcessor, AutoTokenizer, AutoModelForImageTextToText
-from llmcompressor import oneshot
-from llmcompressor.modifiers.transform.awq import AWQModifier
-from llmcompressor.modifiers.quantization import QuantizationModifier
 from huggingface_hub import HfApi
-import argparse
+from llmcompressor import oneshot
+from llmcompressor.modifiers.quantization import QuantizationModifier
+from llmcompressor.modifiers.transform.awq import AWQModifier
+from transformers import AutoProcessor, AutoTokenizer, AutoModelForImageTextToText
 
-parser = argparse.ArgumentParser()
-parser.add_argument("--model_id",       default="YOUR_ORG/YOUR-FINETUNED-MODEL")
-parser.add_argument("--dataset_id",     default="YOUR_ORG/YOUR-CALIBRATION-DATASET")
-parser.add_argument("--save_path",      default="/tmp/YOUR-MODEL-AWQ-W8A16")
-parser.add_argument("--hf_repo",        default="YOUR_HF_USERNAME/YOUR-MODEL-AWQ-W8A16")
-parser.add_argument("--num_samples",    type=int, default=256)
-parser.add_argument("--max_seq_len",    type=int, default=2048)
-parser.add_argument("--no_push",        action="store_true")
+parser = argparse.ArgumentParser(description="AWQ W8A16 quantization for Qwen3.5 VL models")
+parser.add_argument("--model_id",    required=True, help="HF repo id or local path of the model to quantize")
+parser.add_argument("--dataset_id",  required=True, help="HF dataset id used for calibration")
+parser.add_argument("--save_path",   default=None,  help="output dir (default: /tmp/<model>-awq-w8a16)")
+parser.add_argument("--hf_repo",     default=os.environ.get("HF_REPO", ""),
+                    help="destination HF repo; push is skipped if unset")
+parser.add_argument("--num_samples", type=int, default=256, help="calibration samples")
+parser.add_argument("--max_seq_len", type=int, default=2048, help="calibration sequence length")
+parser.add_argument("--no_push",     action="store_true", help="quantize only, never upload")
 args = parser.parse_args()
+
+if args.save_path is None:
+    args.save_path = f"/tmp/{args.model_id.split('/')[-1]}-awq-w8a16"
 
 os.makedirs(args.save_path, exist_ok=True)
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
@@ -40,7 +55,7 @@ print(f"  Method   : AWQ W8A16 (calibration-based)")
 print(f"  Model    : {args.model_id}")
 print(f"  Dataset  : {args.dataset_id} ({args.num_samples} samples)")
 print(f"  Save to  : {args.save_path}")
-print(f"  HF repo  : {args.hf_repo}")
+print(f"  HF repo  : {args.hf_repo or '(none -- push skipped)'}")
 print("=" * 62)
 
 print("\n[1/5] Loading tokenizer + processor...")
@@ -117,20 +132,20 @@ size = os.popen(f"du -sh {args.save_path}").read().strip()
 print(f"\n      Saved : {args.save_path}")
 print(f"      Size  : {size}")
 
-if not args.no_push:
+if args.hf_repo and not args.no_push:
     print(f"\n[5/5] Pushing to HuggingFace: {args.hf_repo}...")
     api = HfApi()
     api.create_repo(repo_id=args.hf_repo, exist_ok=True)
     api.upload_folder(folder_path=args.save_path, repo_id=args.hf_repo, repo_type="model")
     print(f"\n  Done. https://huggingface.co/{args.hf_repo}")
 else:
-    print(f"\n[5/5] Skipped push. Model at {args.save_path}")
+    print(f"\n[5/5] Push skipped. Model at {args.save_path}")
 
-print("""
+print(f"""
 ================================================================
   Serve with vLLM:
 ================================================================
-  VLLM_USE_DEEP_GEMM=0 vllm serve {path} \\
+  VLLM_USE_DEEP_GEMM=0 vllm serve {args.save_path} \\
     --port 8000 \\
     --tensor-parallel-size 1 \\
     --max-model-len 32000 \\
@@ -138,8 +153,6 @@ print("""
     --reasoning-parser deepseek_r1 \\
     --gdn-prefill-backend triton \\
     --default-chat-template-kwargs '{{"enable_thinking": true}}' \\
-    --served-model-name YOUR-MODEL-NAME \\
-    --api-key YOUR-API-KEY \\
     --trust-remote-code
 ================================================================
-""".format(path=args.save_path))
+""")

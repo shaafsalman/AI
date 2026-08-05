@@ -50,8 +50,17 @@ if torch.cuda.is_available():
     print('VRAM           :', round(torch.cuda.get_device_properties(0).total_memory / 1e9, 1), 'GB')
 print()
 print('ALL OK')
-print('Next: source $ENV_PATH/bin/activate')
-print('      huggingface-cli login --token YOUR_TOKEN')
-print('      python quantize_w8a16.py   # fast, data-free')
-print('      python quantize_awq.py     # slower, calibration-based')
 "
+
+cat <<EOF
+
+Next steps:
+  source $ENV_PATH/bin/activate
+  hf auth login --token YOUR_TOKEN
+
+  # fast, data-free (~3 min)
+  python rtn_w8a16.py --model_id <org/model> --hf_repo <org/model-w8a16>
+
+  # slower, calibration-based (~35-45 min), better accuracy
+  python awq_w8a16.py --model_id <org/model> --dataset_id <org/calib> --hf_repo <org/model-awq-w8a16>
+EOF

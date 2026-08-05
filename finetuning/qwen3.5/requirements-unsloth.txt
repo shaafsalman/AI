@@ -1,0 +1,31 @@
+# Unsloth stack — for dense_4b_unsloth.py, dense_9b_unsloth.py,
+# dense_27b_unsloth.py and moe_35b_unsloth.py
+#
+#   pip install -r requirements-unsloth.txt
+#
+# Install into its own virtualenv; these versions conflict with the stock
+# HuggingFace stack in requirements-hf.txt.
+#
+# NOTE: moe_35b_unsloth.py needs the --no-deps install sequence documented in
+# its docstring, because Unsloth otherwise pulls in a transformers version that
+# breaks the MoE path. Prefer that sequence over this file for the MoE script.
+
+torch>=2.4
+
+unsloth
+unsloth_zoo
+
+# Qwen3.5 support landed after the last tagged release — install from source.
+transformers @ git+https://github.com/huggingface/transformers.git
+
+trl>=0.12
+peft>=0.13
+accelerate>=1.0
+datasets>=3.0
+huggingface_hub>=0.26
+
+# optim="adamw_8bit"
+bitsandbytes>=0.44
+
+# UNSLOTH_MOE_BACKEND=triton
+triton

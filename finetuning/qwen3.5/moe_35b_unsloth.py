@@ -1,6 +1,6 @@
 """
-train_moe_single_gpu.py — Qwen3.5-35B-A3B MoE LoRA Fine-Tune  (Unsloth, single GPU)
-=====================================================================================
+Qwen3.5-35B-A3B MoE LoRA Fine-Tune  (Unsloth, single GPU)
+===========================================================
 Hardware  : 8 × A100 80GB  (use one GPU per run; set CUDA_VISIBLE_DEVICES accordingly)
             Alternatively: single H100 80GB
 
@@ -9,7 +9,7 @@ Requirements:
     pip install git+https://github.com/huggingface/transformers.git --no-deps
     pip install --no-deps trl==0.22.2
 
-Run with  : python train_moe_single_gpu.py
+Run with  : python moe_35b_unsloth.py
 
 Model notes:
 - Qwen3.5-35B-A3B is a Mixture-of-Experts model: 35B total params, ~3B active per token
@@ -42,11 +42,15 @@ from unsloth import FastModel
 from trl import SFTTrainer, SFTConfig
 
 # ── config ─────────────────────────────────────────────────────────────────────
-MODEL_NAME     = "unsloth/Qwen3.5-35B-A3B"
-HF_MODEL_REPO  = "<YOUR_HF_REPO>"    # e.g. "username/model-name"
-DATASET_NAME   = "<YOUR_DATASET>"    # HuggingFace dataset id, e.g. "username/dataset"
-MAX_SEQ_LENGTH = 4096                # reduce to 2048 if OOM
-LORA_RANK      = 16                  # try 32 for higher adapter capacity
+# Override with environment variables, or edit the defaults.
+MODEL_NAME     = os.environ.get("MODEL_NAME", "unsloth/Qwen3.5-35B-A3B")
+DATASET_NAME   = os.environ.get("DATASET_NAME", "")   # required -- HF dataset id
+HF_REPO        = os.environ.get("HF_REPO", "")        # optional -- push skipped if empty
+MAX_SEQ_LENGTH = 4096                                 # reduce to 2048 if OOM
+LORA_RANK      = 16                                   # try 32 for higher adapter capacity
+
+if not DATASET_NAME:
+    raise SystemExit("Set DATASET_NAME (env var or edit the config block above).")
 
 # ── 1. load model ──────────────────────────────────────────────────────────────
 # FastModel handles both dense and MoE Qwen3.5 variants automatically.
@@ -185,23 +189,22 @@ gc.collect()
 # ── 6. merge and push to HuggingFace Hub ──────────────────────────────────────
 # Merging LoRA adapters into the base weights produces a standalone model
 # that vLLM can serve directly without any adapter loading overhead.
-print(f"Pushing merged 16-bit model to: {HF_MODEL_REPO} …")
-model.push_to_hub_merged(
-    HF_MODEL_REPO,
-    tokenizer,
-    save_method = "merged_16bit",
-    # token= "hf_..."   # or set HF_TOKEN env var / run `huggingface-cli login`
-)
-print("Push complete!")
-print(f"\nTo serve with vLLM:")
-print(f"  vllm serve {HF_MODEL_REPO} --dtype bfloat16 --max-model-len {MAX_SEQ_LENGTH}")
+# Auth comes from the HF_TOKEN env var or a prior `hf auth login`.
+if HF_REPO:
+    print(f"Pushing merged 16-bit model to: {HF_REPO} ...")
+    model.push_to_hub_merged(HF_REPO, tokenizer, save_method="merged_16bit")
+    print("Push complete!")
+    print("\nTo serve with vLLM:")
+    print(f"  vllm serve {HF_REPO} --dtype bfloat16 --max-model-len {MAX_SEQ_LENGTH}")
+else:
+    print("HF_REPO not set -- skipping push.")
 
 # ── optional: push LoRA-only adapters (much smaller) ──────────────────────────
-# model.push_to_hub_merged(f"{HF_MODEL_REPO}-lora", tokenizer, save_method="lora")
+# model.push_to_hub_merged(f"{HF_REPO}-lora", tokenizer, save_method="lora")
 
 # ── optional: push GGUF for llama.cpp / Ollama / LM Studio ───────────────────
 # model.push_to_hub_gguf(
-#     f"{HF_MODEL_REPO}-gguf",
+#     f"{HF_REPO}-gguf",
 #     tokenizer,
 #     quantization_method=["q4_k_m", "q8_0"],
 # )

@@ -2,7 +2,7 @@
 Qwen3.5-9B LoRA Fine-Tune  (Standard HuggingFace / TRL stack, DDP)
 ====================================================================
 Hardware  : 8 × A100-SXM4-40GB  (or 80GB)
-Run with  : torchrun --nproc_per_node=8 --master_addr=localhost --master_port=29500 Qwen3.5-9B.py
+Run with  : torchrun --nproc_per_node=8 --master_addr=localhost --master_port=29500 dense_9b_hf.py
 
 Design decisions:
 - Standard HuggingFace transformers + PEFT + TRL (no Unsloth dependency)
@@ -34,9 +34,11 @@ torch.backends.cudnn.allow_tf32 = True
 local_rank = int(os.environ.get("LOCAL_RANK", 0))
 
 # ── config ─────────────────────────────────────────────────────────────────────
-MODEL_NAME    = "Qwen/Qwen3.5-9B"
-DATASET_NAME  = ""    # HuggingFace dataset id, e.g. "username/dataset"
-HF_MODEL_REPO = ""    # destination repo, e.g. "username/model-name"
+# Override with environment variables, or edit the defaults.
+MODEL_NAME   = os.environ.get("MODEL_NAME", "Qwen/Qwen3.5-9B")
+DATASET_NAME = os.environ.get("DATASET_NAME", "")   # required -- HF dataset id
+HF_REPO      = os.environ.get("HF_REPO", "")        # optional -- push skipped if empty
+HF_TOKEN     = os.environ.get("HF_TOKEN", "")       # never hardcode a token here
 
 OUTPUT_DIR = "qwen35_9b_checkpoints"
 LORA_DIR   = OUTPUT_DIR + "_lora"
@@ -56,8 +58,8 @@ WARMUP_STEPS     = 5
 SEED             = 3407
 DATASET_NUM_PROC = 8     # CPU workers for dataset preprocessing
 
-# Token read from environment; set via `export HF_TOKEN=hf_...` before running
-HF_TOKEN = os.environ.get("HF_TOKEN", "")
+if not DATASET_NAME:
+    raise SystemExit("Set DATASET_NAME (env var or edit the config block above).")
 
 # ── prompt template ────────────────────────────────────────────────────────────
 # Qwen3.5 uses ChatML format.  Instruction/input/output map to
@@ -319,20 +321,20 @@ def merge_and_push():
     print(f"    --language-model-only")
     print("=" * 60 + "\n")
 
-    if not HF_TOKEN:
-        print("HF_TOKEN not set, skipping push")
+    if not (HF_TOKEN and HF_REPO):
+        print("HF_TOKEN or HF_REPO not set -- skipping push.")
         return
 
     api = HfApi(token=HF_TOKEN)
-    api.create_repo(repo_id=HF_MODEL_REPO, repo_type="model", exist_ok=True)
+    api.create_repo(repo_id=HF_REPO, repo_type="model", exist_ok=True)
     api.upload_folder(
         folder_path=MERGED_DIR,
-        repo_id=HF_MODEL_REPO,
+        repo_id=HF_REPO,
         repo_type="model",
         commit_message="Add merged Qwen3.5-9B fine-tuned model (vLLM-ready)",
         ignore_patterns=["*.bak"],
     )
-    print(f"Pushed to HuggingFace: https://huggingface.co/{HF_MODEL_REPO}")
+    print(f"Pushed to HuggingFace: https://huggingface.co/{HF_REPO}")
 
 
 # ── main ───────────────────────────────────────────────────────────────────────

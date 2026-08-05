@@ -1,0 +1,44 @@
+# ── Python ────────────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+.venv/
+venv/
+env/
+quant_env/
+
+# ── Secrets ───────────────────────────────────────────────────────────────────
+.env
+*.token
+
+# ── Model weights and tokenizer artifacts ─────────────────────────────────────
+*.safetensors
+*.gguf
+*.bin
+*.pt
+*.bak
+
+# ── Training / merge / quantization outputs ───────────────────────────────────
+outputs/
+outputs_*/
+checkpoints/
+*_checkpoints/
+*_lora/
+*_merged/
+merged-slerp/
+merged-dare-ties/
+cache_base/
+cache_ft/
+unsloth_compiled_cache/
+
+# ── Framework caches and logs ─────────────────────────────────────────────────
+wandb/
+runs/
+.triton/
+triton_cache*/
+
+# ── OS ────────────────────────────────────────────────────────────────────────
+.DS_Store

@@ -2,7 +2,7 @@
 Qwen3.5-35B-A3B MoE LoRA Fine-Tune  (Standard HuggingFace / TRL stack)
 =======================================================================
 Hardware  : 8 × A100 80GB  (DDP via torchrun)
-Run with  : torchrun --nproc_per_node=8 --master_addr=localhost --master_port=29500 Qwen3.5-35B-MOE.py
+Run with  : torchrun --nproc_per_node=8 --master_addr=localhost --master_port=29500 moe_35b_hf.py
 
 Model notes:
 - Qwen3.5-35B-A3B is a Mixture-of-Experts model: 35B total params, ~3B active per token
@@ -26,12 +26,15 @@ from trl import SFTTrainer, SFTConfig
 from huggingface_hub import HfApi
 
 # ── config ─────────────────────────────────────────────────────────────────────
-DATASET_NAME  = ""                    # HuggingFace dataset id, e.g. "username/dataset"
-MODEL_NAME    = "Qwen/Qwen3.5-35B-A3B"
-HF_MODEL_REPO = ""                    # destination repo, e.g. "username/model-name"
-OUTPUT_DIR    = "qwen35_moe_checkpoints"
-LORA_DIR      = OUTPUT_DIR + "_lora"
-MERGED_DIR    = OUTPUT_DIR + "_merged"
+# Override with environment variables, or edit the defaults.
+MODEL_NAME   = os.environ.get("MODEL_NAME", "Qwen/Qwen3.5-35B-A3B")
+DATASET_NAME = os.environ.get("DATASET_NAME", "")   # required -- HF dataset id
+HF_REPO      = os.environ.get("HF_REPO", "")        # optional -- push skipped if empty
+HF_TOKEN     = os.environ.get("HF_TOKEN", "")       # never hardcode a token here
+
+OUTPUT_DIR   = "qwen35_moe_checkpoints"
+LORA_DIR     = OUTPUT_DIR + "_lora"
+MERGED_DIR   = OUTPUT_DIR + "_merged"
 
 # Sequence & LoRA hyperparameters
 MAX_SEQ_LEN   = 2048
@@ -46,8 +49,8 @@ LR            = 2e-4
 WARMUP_STEPS  = 100
 SEED          = 3407
 
-# Token read from environment; set via `export HF_TOKEN=hf_...` before running
-HF_TOKEN      = os.environ.get("HF_TOKEN", "")
+if not DATASET_NAME:
+    raise SystemExit("Set DATASET_NAME (env var or edit the config block above).")
 
 # ── prompt template ────────────────────────────────────────────────────────────
 # Qwen3.5 uses the ChatML format.  Instruction/input/output map to
@@ -214,22 +217,22 @@ def merge_and_push():
         json.dump(cfg, f, indent=2)
     print("Patched config.json architecture")
 
-    if not HF_TOKEN:
-        print("No HF_TOKEN set, skipping push.")
+    if not (HF_TOKEN and HF_REPO):
+        print("HF_TOKEN or HF_REPO not set -- skipping push.")
         return
 
-    print(f"Pushing to {HF_MODEL_REPO}...")
+    print(f"Pushing to {HF_REPO}...")
     # Use HfApi.upload_folder to avoid deprecated safe_serialization kwarg
     # issues that arise with model.push_to_hub on large sharded models
     api = HfApi(token=HF_TOKEN)
-    api.create_repo(repo_id=HF_MODEL_REPO, repo_type="model", exist_ok=True)
+    api.create_repo(repo_id=HF_REPO, repo_type="model", exist_ok=True)
     api.upload_folder(
         folder_path=MERGED_DIR,
-        repo_id=HF_MODEL_REPO,
+        repo_id=HF_REPO,
         repo_type="model",
         commit_message="Add merged Qwen3.5-35B-A3B fine-tuned model",
     )
-    print(f"Done — https://huggingface.co/{HF_MODEL_REPO}")
+    print(f"Done -- https://huggingface.co/{HF_REPO}")
 
 
 def main():
