@@ -77,15 +77,16 @@ downstream — serve, evaluate, ship — is worthless if the adapter did not lan
 so `verify_merge.py` diffs the merged weights against the cached base snapshot
 and the pipeline stops dead unless it reports `adapter APPLIED`.
 
-**BF16 only.** 4-bit quantized training is broken here: the gated-delta-net
-`in_proj_z` projection does not survive the quantized forward pass. As with the
-missing adapter, the failure is silent — a plausible loss curve on a model that
-learned nothing. Don't reach for 4-bit to fit a bigger base model; drop
-`LORA_R` or the sequence length instead.
+**BF16 only.** 4-bit quantized training is broken here: the quantization
+library dequantizes the gated-delta-net `in_proj_z` projection to the wrong
+shape — the right number of values, flattened into a single row — and the
+first forward pass fails. It affects two thirds of the layers. BF16 LoRA on a
+27B peaks under 70GB on an 80GB card anyway, so 4-bit buys nothing; if you
+need headroom, drop `LORA_R` or the sequence length instead.
 
 **GPU release before every stage.** Each stage that needs the card calls
 `free_gpu` first. Without it, a vLLM server left over from a previous stage
-will OOM the trainer around forty minutes in. It only ever kills processes
+will OOM the trainer. It only ever kills processes
 owned by the current user, so it is safe on a shared box, and it waits for the
 card to actually drain rather than assuming the kill took.
 
@@ -100,7 +101,7 @@ committed. `.env` next to the script is sourced before training if present.
 | Variable | Default | Meaning |
 |---|---|---|
 | `WORK_DIR` | script directory | Where the data, logs and merged model live |
-| `BASE_MODEL` | `unsloth/Qwen3.5-27B` | Base checkpoint |
+| `BASE_MODEL` | `unsloth/Qwen3.8-27B` | Base checkpoint |
 | `GPU` | `0` | Single GPU index — this pipeline does not shard |
 | `RUN_TAG` | `v1` | Names the training file, merged dir, logs and score records |
 | `EVAL_UPSAMPLE` | `1` | Repeats of each eval-overlapping row — **see the warning above** |

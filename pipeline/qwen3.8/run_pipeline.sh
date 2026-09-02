@@ -26,9 +26,10 @@
 #
 # ── Design decisions ─────────────────────────────────────────────────────────
 # - BF16 LoRA only. 4-bit quantized training is broken on this architecture:
-#   the gated-delta-net `in_proj_z` projection does not survive the quantized
-#   forward pass, and the run trains to a plausible-looking loss curve on a
-#   model that has learned nothing.
+#   the quantization library dequantizes the gated-delta-net `in_proj_z`
+#   projection to the wrong shape — right number of values, flattened into a
+#   single row — and the first forward pass fails. BF16 LoRA peaks under 70GB
+#   on an 80GB card anyway, so 4-bit buys nothing.
 # - The training guard fails the run if the adapter did not reach the DeltaNet
 #   projections. Adapting only q/k/v on a hybrid-attention model silently
 #   leaves two thirds of the layers untouched.
@@ -36,7 +37,7 @@
 #   produces either the unmodified base weights or garbage, without erroring,
 #   so `verify_merge.py` is a hard gate — no adapter, no evaluation.
 # - The GPU is force-released before every stage that needs it. A leftover vLLM
-#   server from a previous stage will otherwise OOM the trainer 40 minutes in.
+#   server from a previous stage will otherwise OOM the trainer.
 # - Nothing is hardcoded: every path, model id and hyperparameter reads from
 #   the environment with a default below, and no token is ever committed.
 # =============================================================================
@@ -53,7 +54,7 @@ PYTHON="${PYTHON:-python}"                # interpreter for the training venv
 EVAL_PYTHON="${EVAL_PYTHON:-$PYTHON}"     # the eval harness usually wants its own
 export HF_HOME="${HF_HOME:-$WORK_DIR/hf_cache}"
 
-BASE_MODEL="${BASE_MODEL:-unsloth/Qwen3.5-27B}"
+BASE_MODEL="${BASE_MODEL:-unsloth/Qwen3.8-27B}"
 HF_DATASET="${HF_DATASET:-}"              # optional -- push of the training mix
 HF_TOKEN="${HF_TOKEN:-}"                  # never hardcode a token here
 
