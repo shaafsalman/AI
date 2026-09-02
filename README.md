@@ -18,6 +18,10 @@ dataset formatter), and that is deliberate: no shared package to install, no
 import paths to fix, nothing to break when you run one script on a machine that
 only has that one file.
 
+The one exception is [`pipeline/`](pipeline), which orchestrates the stages
+end to end on a single GPU and therefore calls out to helper scripts you
+supply — its README documents that contract.
+
 ---
 
 ## Repository layout
@@ -40,6 +44,10 @@ only has that one file.
 │   └── qwen3.5/
 │       ├── slerp_dare_ties.py       CPU weight-space merge, two outputs
 │       └── requirements.txt
+├── pipeline/
+│   ├── README.md                    stage guards, contamination warning, helper contract
+│   └── qwen3.5/
+│       └── run_pipeline.sh          single-GPU driver: data -> train -> merge -> eval -> ship
 └── quantization/
     ├── README.md                    method comparison, layer policy
     └── qwen3.5/
@@ -75,6 +83,16 @@ between them.
 producing a SLERP merge and a DARE merge in one pass so you can evaluate both.
 Runs on CPU. Useful for clawing back general capability that a narrow fine-tune
 eroded.
+
+### Pipeline — `pipeline/qwen3.5/`
+
+`run_pipeline.sh` drives the whole arc on one GPU — build the training mix,
+train, merge, verify the adapter actually landed, serve, evaluate, ship — with
+a guard on each step so a bad run dies in seconds instead of hours. Unlike the
+rest of the repo it is an orchestrator, not a standalone script: it calls
+helper scripts (trainer, eval harness, graders) that you supply. Its README
+documents that contract, and opens with the contamination warning that the
+`EVAL_UPSAMPLE` knob deserves.
 
 ### Quantization — `quantization/qwen3.5/`
 
