@@ -7,21 +7,17 @@ served, quantized endpoint:
 fine-tune (LoRA)  ──►  merge  ──►  quantize  ──►  serve (vLLM)
 ```
 
-The single-stage scripts target the **Qwen3.5** family, across dense and MoE
-variants, on both the Unsloth and the stock HuggingFace training stacks; the
-end-to-end pipeline targets **Qwen3.8-27B**. The layout is organised by stage
-and then by model family, so a new family slots in alongside the existing ones
-without reshuffling anything.
+Most of this targets the **Qwen3.5** family, across dense and MoE variants, on
+both the Unsloth and the stock HuggingFace training stacks; `finetuning/qwen3.8/`
+adds **Qwen3.8-27B**. The layout is organised by stage and then by model family,
+so a new family slots in alongside the existing ones without reshuffling
+anything.
 
 Each script is **standalone** — a single file you can copy onto a GPU box and
 run. That means a little duplication between them (the vLLM config patches, the
 dataset formatter), and that is deliberate: no shared package to install, no
 import paths to fix, nothing to break when you run one script on a machine that
 only has that one file.
-
-The one exception is [`pipeline/`](pipeline), which orchestrates the stages
-end to end on a single GPU and therefore calls out to helper scripts you
-supply — its README documents that contract.
 
 ---
 
@@ -31,24 +27,23 @@ supply — its README documents that contract.
 .
 ├── finetuning/
 │   ├── README.md                    stack comparison, dataset schema, launching
-│   └── qwen3.5/
-│       ├── dense_4b_unsloth.py      Qwen3.5-4B     · Unsloth  · 8-GPU DDP
-│       ├── dense_9b_hf.py           Qwen3.5-9B     · HF/TRL   · 8-GPU DDP
-│       ├── dense_9b_unsloth.py      Qwen3.5-9B     · Unsloth  · single GPU
-│       ├── dense_27b_unsloth.py     Qwen3.5-27B    · Unsloth  · 8-GPU DDP
-│       ├── moe_35b_hf.py            Qwen3.5-35B-A3B MoE · HF/TRL  · 8-GPU DDP
-│       ├── moe_35b_unsloth.py       Qwen3.5-35B-A3B MoE · Unsloth · single GPU
-│       ├── requirements-hf.txt
+│   ├── qwen3.5/
+│   │   ├── dense_4b_unsloth.py      Qwen3.5-4B     · Unsloth  · 8-GPU DDP
+│   │   ├── dense_9b_hf.py           Qwen3.5-9B     · HF/TRL   · 8-GPU DDP
+│   │   ├── dense_9b_unsloth.py      Qwen3.5-9B     · Unsloth  · single GPU
+│   │   ├── dense_27b_unsloth.py     Qwen3.5-27B    · Unsloth  · 8-GPU DDP
+│   │   ├── moe_35b_hf.py            Qwen3.5-35B-A3B MoE · HF/TRL  · 8-GPU DDP
+│   │   ├── moe_35b_unsloth.py       Qwen3.5-35B-A3B MoE · Unsloth · single GPU
+│   │   ├── requirements-hf.txt
+│   │   └── requirements-unsloth.txt
+│   └── qwen3.8/
+│       ├── dense_27b_unsloth.py     Qwen3.8-27B    · Unsloth  · single GPU · DeltaNet
 │       └── requirements-unsloth.txt
 ├── merging/
 │   ├── README.md                    SLERP vs DARE, choosing a ratio
 │   └── qwen3.5/
 │       ├── slerp_dare_ties.py       CPU weight-space merge, two outputs
 │       └── requirements.txt
-├── pipeline/
-│   ├── README.md                    stage guards, contamination warning, helper contract
-│   └── qwen3.8/
-│       └── run_pipeline.sh          single-GPU driver: data -> train -> merge -> eval -> ship
 └── quantization/
     ├── README.md                    method comparison, layer policy
     └── qwen3.5/
@@ -71,8 +66,9 @@ supply — its README documents that contract.
 | `dense_27b_unsloth.py` | Qwen3.5-27B dense | Unsloth + TRL | 8 × A100 80GB | `torchrun --nproc_per_node=8` |
 | `moe_35b_hf.py` | Qwen3.5-35B-A3B MoE | HF + PEFT + TRL | 8 × A100 80GB | `torchrun --nproc_per_node=8` |
 | `moe_35b_unsloth.py` | Qwen3.5-35B-A3B MoE | Unsloth | 1 × A100/H100 80GB | `python` |
+| `qwen3.8/dense_27b_unsloth.py` | Qwen3.8-27B dense | Unsloth | 1 × H100 80GB | `python` |
 
-All six train LoRA in BF16, merge the adapter into the base weights, and
+All seven train LoRA in BF16, merge the adapter into the base weights, and
 optionally push the merged model to the Hub. Five also save the standalone LoRA
 adapter alongside it; `moe_35b_unsloth.py` goes straight from training to a
 merged push. See [`finetuning/README.md`](finetuning/README.md) for how to pick
@@ -84,16 +80,6 @@ between them.
 producing a SLERP merge and a DARE merge in one pass so you can evaluate both.
 Runs on CPU. Useful for clawing back general capability that a narrow fine-tune
 eroded.
-
-### Pipeline — `pipeline/qwen3.8/`
-
-`run_pipeline.sh` drives the whole arc on one GPU — build the training mix,
-train, merge, verify the adapter actually landed, serve, evaluate, ship — with
-a guard on each step so a bad run dies in seconds instead of hours. Unlike the
-rest of the repo it is an orchestrator, not a standalone script: it calls
-helper scripts (trainer, eval harness, graders) that you supply. Its README
-documents that contract, and opens with the contamination warning that the
-`EVAL_UPSAMPLE` knob deserves.
 
 ### Quantization — `quantization/qwen3.5/`
 

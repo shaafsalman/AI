@@ -1,6 +1,6 @@
 # Fine-tuning
 
-LoRA fine-tuning scripts for Qwen3.5. Every script follows the same arc:
+LoRA fine-tuning scripts for Qwen3.5 and Qwen3.8. Every script follows the same arc:
 
 ```
 load base (BF16)  ─►  attach LoRA  ─►  format dataset  ─►  train
@@ -41,6 +41,17 @@ when you want the run to be reproducible six months from now.
 | `dense_27b_unsloth.py` | Qwen3.5-27B dense | Unsloth | 8 × A100 80GB | `torchrun --nproc_per_node=8` |
 | `moe_35b_hf.py` | Qwen3.5-35B-A3B MoE | HF/TRL | 8 × A100 80GB | `torchrun --nproc_per_node=8` |
 | `moe_35b_unsloth.py` | Qwen3.5-35B-A3B MoE | Unsloth | 1 × A100/H100 80GB | `python` |
+| `../qwen3.8/dense_27b_unsloth.py` | Qwen3.8-27B dense | Unsloth | 1 × H100 80GB | `python` |
+
+`qwen3.8/dense_27b_unsloth.py` is the odd one out. Qwen3.8-27B is a hybrid
+attention model: two thirds of its layers are gated linear-attention (DeltaNet)
+blocks whose projections are not named `q_proj` / `k_proj` / `v_proj`. A target
+list copied from a standard transformer silently adapts about a quarter of the
+network. That script therefore discovers `target_modules` by walking the module
+tree, asserts the adapter reached the DeltaNet blocks before training starts,
+and verifies the merge against the base weights afterwards. It is also BF16
+only — 4-bit dequantizes the DeltaNet `in_proj_z` to the wrong shape and dies on
+the first forward pass.
 
 The 35B-A3B is a Mixture-of-Experts model: 35B total parameters, roughly 3B
 active per token. It fits on a single 80GB card in BF16 LoRA, which is why the
@@ -54,6 +65,7 @@ per GPU, via `CUDA_VISIBLE_DEVICES`.
 ```bash
 pip install -r qwen3.5/requirements-hf.txt        # for the *_hf.py scripts
 pip install -r qwen3.5/requirements-unsloth.txt   # for the *_unsloth.py scripts
+pip install -r qwen3.8/requirements-unsloth.txt   # for qwen3.8/dense_27b_unsloth.py
 ```
 
 Install them into **separate** virtual environments. Unsloth pins versions that
